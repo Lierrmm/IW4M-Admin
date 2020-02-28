@@ -8,7 +8,6 @@ var plugin = {
         if (server.GameName !== 2) {
             return false;
         }
-
         // connect or join event
         if (gameEvent.Type === 3) {
             // this GUID seems to have been packed in a IW4 torrent and results in an unreasonable amount of people using the same GUID
