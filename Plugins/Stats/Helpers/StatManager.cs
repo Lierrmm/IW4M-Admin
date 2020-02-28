@@ -367,17 +367,31 @@ namespace IW4MAdmin.Plugins.Stats.Helpers
         {
             pl.CurrentServer.Logger.WriteInfo($"Removing {pl} from stats");
 
+            if (pl.CurrentServer == null)
+            {
+                pl.CurrentServer.Logger.WriteWarning($"Disconnecting client {pl} is not on a server, state is {pl.State}");
+                return;
+            }
+
             long serverId = GetIdForServer(pl.CurrentServer);
             var serverStats = _servers[serverId].ServerStatistics;
 
             // get individual client's stats
             var clientStats = pl.GetAdditionalProperty<EFClientStatistics>(CLIENT_STATS_KEY);
             // sync their stats before they leave
-            clientStats = UpdateStats(clientStats);
-            await SaveClientStats(clientStats);
+            if (clientStats != null)
+            {
+                clientStats = UpdateStats(clientStats);
+                await SaveClientStats(clientStats);
 
-            // increment the total play time
-            serverStats.TotalPlayTime += pl.ConnectionLength;
+                // increment the total play time
+                serverStats.TotalPlayTime += pl.ConnectionLength;
+            }
+
+            else
+            {
+                pl.CurrentServer.Logger.WriteWarning($"Disconnecting client {pl} has not been added to stats, state is {pl.State}");
+            }
         }
 
         private static async Task SaveClientStats(EFClientStatistics clientStats)
@@ -510,7 +524,6 @@ namespace IW4MAdmin.Plugins.Stats.Helpers
 
                 if (Plugin.Config.Configuration().EnableAntiCheat && !attacker.IsBot && attacker.ClientId != victim.ClientId)
                 {
-                    DetectionPenaltyResult result = new DetectionPenaltyResult() { ClientPenalty = EFPenalty.PenaltyType.Any };
                     clientDetection.TrackedHits.Add(hit);
 
                     if (clientDetection.TrackedHits.Count >= MIN_HITS_TO_RUN_DETECTION)
@@ -525,9 +538,9 @@ namespace IW4MAdmin.Plugins.Stats.Helpers
 
                             if (oldestHit.IsAlive)
                             {
-                                result = clientDetection.ProcessHit(oldestHit, isDamage);
+                                var result = DeterminePenaltyResult(clientDetection.ProcessHit(oldestHit), attacker.CurrentServer.EndPoint);
 #if !DEBUG
-                            await ApplyPenalty(result, attacker);
+                                await ApplyPenalty(result, attacker);
 #endif
 
                                 if (clientDetection.Tracker.HasChanges && result.ClientPenalty != EFPenalty.PenaltyType.Any)
@@ -564,6 +577,18 @@ namespace IW4MAdmin.Plugins.Stats.Helpers
             }
         }
 
+        private DetectionPenaltyResult DeterminePenaltyResult(IEnumerable<DetectionPenaltyResult> results, long serverId)
+        {
+            // allow disabling of certain detection types
+            results = results.Where(_result => ShouldUseDetection(serverId, _result.Type));
+            return results.FirstOrDefault(_result => _result.ClientPenalty == EFPenalty.PenaltyType.Ban) ??
+                results.FirstOrDefault(_result => _result.ClientPenalty == EFPenalty.PenaltyType.Flag) ??
+                new DetectionPenaltyResult()
+                {
+                    ClientPenalty = EFPenalty.PenaltyType.Any,
+                };
+        }
+
         public async Task SaveHitCache(long serverId)
         {
             using (var ctx = new DatabaseContext(true))
@@ -594,12 +619,6 @@ namespace IW4MAdmin.Plugins.Stats.Helpers
 
         async Task ApplyPenalty(DetectionPenaltyResult penalty, EFClient attacker)
         {
-            // allow disabling of certain detection types
-            if (!ShouldUseDetection(attacker.CurrentServer.EndPoint, penalty.Type))
-            {
-                return;
-            }
-
             var penaltyClient = Utilities.IW4MAdminClient(attacker.CurrentServer);
             switch (penalty.ClientPenalty)
             {

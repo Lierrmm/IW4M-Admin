@@ -2,12 +2,14 @@
 using SharedLibraryCore.Database.Models;
 using SharedLibraryCore.Interfaces;
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Text.RegularExpressions;
 using static SharedLibraryCore.Server;
 
 namespace IW4MAdmin.Application.EventParsers
 {
-    class BaseEventParser : IEventParser
+    public class BaseEventParser : IEventParser
     {
         public BaseEventParser()
         {
@@ -35,7 +37,7 @@ namespace IW4MAdmin.Application.EventParsers
             Configuration.Join.AddMapping(ParserRegex.GroupType.OriginClientNumber, 3);
             Configuration.Join.AddMapping(ParserRegex.GroupType.OriginName, 4);
 
-            Configuration.Damage.Pattern = @"^(D);(-?[A-Fa-f0-9_]{1,32}|bot[0-9]+);(-?[0-9]+);(axis|allies|world)?;(.{1,24});(-?[A-Fa-f0-9_]{1,32}|bot[0-9]+)?;-?([0-9]+);(axis|allies|world)?;(.{1,24})?;((?:[0-9]+|[a-z]+|_)+);([0-9]+);((?:[A-Z]|_)+);((?:[a-z]|_)+)$";
+            Configuration.Damage.Pattern = @"^(D);(-?[A-Fa-f0-9_]{1,32}|bot[0-9]+);(-?[0-9]+);(axis|allies|world)?;([^;]{1,24});(-?[A-Fa-f0-9_]{1,32}|bot[0-9]+)?;-?([0-9]+);(axis|allies|world)?;([^;]{1,24})?;((?:[0-9]+|[a-z]+|_|\+)+);([0-9]+);((?:[A-Z]|_)+);((?:[a-z]|_)+)$";
             Configuration.Damage.AddMapping(ParserRegex.GroupType.EventType, 1);
             Configuration.Damage.AddMapping(ParserRegex.GroupType.TargetNetworkId, 2);
             Configuration.Damage.AddMapping(ParserRegex.GroupType.TargetClientNumber, 3);
@@ -50,7 +52,7 @@ namespace IW4MAdmin.Application.EventParsers
             Configuration.Damage.AddMapping(ParserRegex.GroupType.MeansOfDeath, 12);
             Configuration.Damage.AddMapping(ParserRegex.GroupType.HitLocation, 13);
 
-            Configuration.Kill.Pattern = @"^(K);(-?[A-Fa-f0-9_]{1,32}|bot[0-9]+);(-?[0-9]+);(axis|allies|world)?;(.{1,24});(-?[A-Fa-f0-9_]{1,32}|bot[0-9]+)?;-?([0-9]+);(axis|allies|world)?;(.{1,24})?;((?:[0-9]+|[a-z]+|_)+);([0-9]+);((?:[A-Z]|_)+);((?:[a-z]|_)+)$";
+            Configuration.Kill.Pattern = @"^(K);(-?[A-Fa-f0-9_]{1,32}|bot[0-9]+);(-?[0-9]+);(axis|allies|world)?;([^;]{1,24});(-?[A-Fa-f0-9_]{1,32}|bot[0-9]+)?;-?([0-9]+);(axis|allies|world)?;([^;]{1,24})?;((?:[0-9]+|[a-z]+|_|\+)+);([0-9]+);((?:[A-Z]|_)+);((?:[a-z]|_)+)$";
             Configuration.Kill.AddMapping(ParserRegex.GroupType.EventType, 1);
             Configuration.Kill.AddMapping(ParserRegex.GroupType.TargetNetworkId, 2);
             Configuration.Kill.AddMapping(ParserRegex.GroupType.TargetClientNumber, 3);
@@ -78,7 +80,18 @@ namespace IW4MAdmin.Application.EventParsers
 
         public virtual GameEvent GenerateGameEvent(string logLine)
         {
-            logLine = Regex.Replace(logLine, @"([0-9]+:[0-9]+ |^[0-9]+ )", "").Trim();
+            var timeMatch = Regex.Match(logLine, @"^ *(([0-9]+):([0-9]+) |^[0-9]+ )");
+            int gameTime = 0;
+            
+            if (timeMatch.Success)
+            {
+                gameTime = (timeMatch.Groups.Values as IEnumerable<object>)
+                    .Skip(2)
+                    .Select(_value => int.Parse(_value.ToString()))
+                    .Sum();
+                logLine = logLine.Substring(timeMatch.Value.Length);
+            } 
+
             string[] lineSplit = logLine.Split(';');
             string eventType = lineSplit[0];
 
@@ -107,7 +120,8 @@ namespace IW4MAdmin.Application.EventParsers
                                 Origin = new EFClient() { NetworkId = originId },
                                 Message = message,
                                 Extra = logLine,
-                                RequiredEntity = GameEvent.EventRequiredEntity.Origin
+                                RequiredEntity = GameEvent.EventRequiredEntity.Origin,
+                                GameTime = gameTime
                             };
                         }
 
@@ -118,7 +132,8 @@ namespace IW4MAdmin.Application.EventParsers
                             Origin = new EFClient() { NetworkId = originId },
                             Message = message,
                             Extra = logLine,
-                            RequiredEntity = GameEvent.EventRequiredEntity.Origin
+                            RequiredEntity = GameEvent.EventRequiredEntity.Origin,
+                            GameTime = gameTime
                         };
                     }
                 }
@@ -139,7 +154,8 @@ namespace IW4MAdmin.Application.EventParsers
                         Data = logLine,
                         Origin = new EFClient() { NetworkId = originId },
                         Target = new EFClient() { NetworkId = targetId },
-                        RequiredEntity = GameEvent.EventRequiredEntity.Origin | GameEvent.EventRequiredEntity.Target
+                        RequiredEntity = GameEvent.EventRequiredEntity.Origin | GameEvent.EventRequiredEntity.Target,
+                        GameTime = gameTime
                     };
                 }
             }
@@ -159,7 +175,8 @@ namespace IW4MAdmin.Application.EventParsers
                         Data = logLine,
                         Origin = new EFClient() { NetworkId = originId },
                         Target = new EFClient() { NetworkId = targetId },
-                        RequiredEntity = GameEvent.EventRequiredEntity.Origin | GameEvent.EventRequiredEntity.Target
+                        RequiredEntity = GameEvent.EventRequiredEntity.Origin | GameEvent.EventRequiredEntity.Target,
+                        GameTime = gameTime
                     };
                 }
             }
@@ -178,14 +195,15 @@ namespace IW4MAdmin.Application.EventParsers
                         {
                             CurrentAlias = new EFAlias()
                             {
-                                Name = regexMatch.Groups[Configuration.Join.GroupMapping[ParserRegex.GroupType.OriginName]].ToString(),
+                                Name = regexMatch.Groups[Configuration.Join.GroupMapping[ParserRegex.GroupType.OriginName]].ToString().TrimNewLine(),
                             },
                             NetworkId = regexMatch.Groups[Configuration.Join.GroupMapping[ParserRegex.GroupType.OriginNetworkId]].ToString().ConvertGuidToLong(Configuration.GuidNumberStyle),
                             ClientNumber = Convert.ToInt32(regexMatch.Groups[Configuration.Join.GroupMapping[ParserRegex.GroupType.OriginClientNumber]].ToString()),
                             State = EFClient.ClientState.Connecting,
                         },
                         RequiredEntity = GameEvent.EventRequiredEntity.None,
-                        IsBlocking = true
+                        IsBlocking = true,
+                        GameTime = gameTime
                     };
                 }
             }
@@ -203,14 +221,15 @@ namespace IW4MAdmin.Application.EventParsers
                         {
                             CurrentAlias = new EFAlias()
                             {
-                                Name = regexMatch.Groups[Configuration.Quit.GroupMapping[ParserRegex.GroupType.OriginName]].ToString()
+                                Name = regexMatch.Groups[Configuration.Quit.GroupMapping[ParserRegex.GroupType.OriginName]].ToString().TrimNewLine()
                             },
                             NetworkId = regexMatch.Groups[Configuration.Quit.GroupMapping[ParserRegex.GroupType.OriginNetworkId]].ToString().ConvertGuidToLong(Configuration.GuidNumberStyle),
                             ClientNumber = Convert.ToInt32(regexMatch.Groups[Configuration.Quit.GroupMapping[ParserRegex.GroupType.OriginClientNumber]].ToString()),
                             State = EFClient.ClientState.Disconnecting
                         },
                         RequiredEntity = GameEvent.EventRequiredEntity.None,
-                        IsBlocking = true
+                        IsBlocking = true,
+                        GameTime = gameTime
                     };
                 }
             }
@@ -223,7 +242,8 @@ namespace IW4MAdmin.Application.EventParsers
                     Data = logLine,
                     Origin = Utilities.IW4MAdminClient(),
                     Target = Utilities.IW4MAdminClient(),
-                    RequiredEntity = GameEvent.EventRequiredEntity.None
+                    RequiredEntity = GameEvent.EventRequiredEntity.None,
+                    GameTime = gameTime
                 };
             }
 
@@ -238,7 +258,8 @@ namespace IW4MAdmin.Application.EventParsers
                     Origin = Utilities.IW4MAdminClient(),
                     Target = Utilities.IW4MAdminClient(),
                     Extra = dump.DictionaryFromKeyValue(),
-                    RequiredEntity = GameEvent.EventRequiredEntity.None
+                    RequiredEntity = GameEvent.EventRequiredEntity.None,
+                    GameTime = gameTime
                 };
             }
 
@@ -250,7 +271,8 @@ namespace IW4MAdmin.Application.EventParsers
                     Type = GameEvent.EventType.JoinTeam,
                     Data = logLine,
                     Origin = new EFClient() { NetworkId = lineSplit[1].ConvertGuidToLong(Configuration.GuidNumberStyle) },
-                    RequiredEntity = GameEvent.EventRequiredEntity.Target
+                    RequiredEntity = GameEvent.EventRequiredEntity.Target,
+                    GameTime = gameTime
                 };
             }
 
@@ -267,7 +289,8 @@ namespace IW4MAdmin.Application.EventParsers
                     Data = logLine,
                     Origin = new EFClient() { NetworkId = originId },
                     Target = new EFClient() { NetworkId = targetId },
-                    RequiredEntity = GameEvent.EventRequiredEntity.Origin | GameEvent.EventRequiredEntity.Target
+                    RequiredEntity = GameEvent.EventRequiredEntity.Origin | GameEvent.EventRequiredEntity.Target,
+                    GameTime = gameTime
                 };
             }
 
@@ -283,7 +306,8 @@ namespace IW4MAdmin.Application.EventParsers
                     Data = logLine,
                     Origin = new EFClient() { NetworkId = originId },
                     Target = new EFClient() { NetworkId = targetId },
-                    RequiredEntity = GameEvent.EventRequiredEntity.Origin | GameEvent.EventRequiredEntity.Target
+                    RequiredEntity = GameEvent.EventRequiredEntity.Origin | GameEvent.EventRequiredEntity.Target,
+                    GameTime = gameTime
                 };
             }
 
@@ -293,7 +317,8 @@ namespace IW4MAdmin.Application.EventParsers
                 Data = logLine,
                 Origin = Utilities.IW4MAdminClient(),
                 Target = Utilities.IW4MAdminClient(),
-                RequiredEntity = GameEvent.EventRequiredEntity.None
+                RequiredEntity = GameEvent.EventRequiredEntity.None,
+                GameTime = gameTime
             };
         }
     }

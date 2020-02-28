@@ -1,11 +1,16 @@
-﻿using IW4MAdmin.Application.Migration;
+﻿using IW4MAdmin.Application.Factories;
+using IW4MAdmin.Application.Helpers;
+using IW4MAdmin.Application.IO;
+using IW4MAdmin.Application.Migration;
 using IW4MAdmin.Application.Misc;
 using Microsoft.Extensions.DependencyInjection;
 using SharedLibraryCore;
+using SharedLibraryCore.Configuration;
 using SharedLibraryCore.Exceptions;
 using SharedLibraryCore.Helpers;
 using SharedLibraryCore.Interfaces;
 using System;
+using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -18,6 +23,7 @@ namespace IW4MAdmin.Application
         public static ApplicationManager ServerManager;
         private static Task ApplicationTask;
         private static readonly BuildNumber _fallbackVersion = BuildNumber.Parse("99.99.99.99");
+        private static ServiceProvider serviceProvider;
 
         /// <summary>
         /// entrypoint of the application
@@ -60,34 +66,28 @@ namespace IW4MAdmin.Application
         private static async Task LaunchAsync()
         {
         restart:
+            ITranslationLookup translationLookup = null;
             try
             {
-                var services = ConfigureServices();
-
-                using (var builder = services.BuildServiceProvider())
-                {
-                    ServerManager = (ApplicationManager)builder.GetRequiredService<IManager>();
-                }
-
-                var configuration = ServerManager.GetApplicationSettings().Configuration();
-                Localization.Configure.Initialize(configuration?.EnableCustomLocale ?? false ? (configuration.CustomLocale ?? "en-US") : "en-US");
-
                 // do any needed housekeeping file/folder migrations
                 ConfigurationMigration.MoveConfigFolder10518(null);
                 ConfigurationMigration.CheckDirectories();
 
+                var services = ConfigureServices();
+                serviceProvider = services.BuildServiceProvider();
+                ServerManager = (ApplicationManager)serviceProvider.GetRequiredService<IManager>();
+                translationLookup = serviceProvider.GetRequiredService<ITranslationLookup>();
+
                 ServerManager.Logger.WriteInfo(Utilities.CurrentLocalization.LocalizationIndex["MANAGER_VERSION"].FormatExt(Version));
 
-
-                await CheckVersion();
+                await CheckVersion(translationLookup);
                 await ServerManager.Init();
             }
 
             catch (Exception e)
             {
-                var loc = Utilities.CurrentLocalization.LocalizationIndex;
-                string failMessage = loc == null ? "Failed to initalize IW4MAdmin" : loc["MANAGER_INIT_FAIL"];
-                string exitMessage = loc == null ? "Press any key to exit..." : loc["MANAGER_EXIT"];
+                string failMessage = translationLookup == null ? "Failed to initalize IW4MAdmin" : translationLookup["MANAGER_INIT_FAIL"];
+                string exitMessage = translationLookup == null ? "Press any key to exit..." : translationLookup["MANAGER_EXIT"];
 
                 Console.WriteLine(failMessage);
 
@@ -96,14 +96,22 @@ namespace IW4MAdmin.Application
                     e = e.InnerException;
                 }
 
-                Console.WriteLine(e.Message);
-
-                if (e is ConfigurationException cfgE)
+                if (e is ConfigurationException configException)
                 {
-                    foreach (string error in cfgE.Errors)
+                    if (translationLookup != null)
+                    {
+                        Console.WriteLine(translationLookup[configException.Message].FormatExt(configException.ConfigurationFileName));
+                    }
+
+                    foreach (string error in configException.Errors)
                     {
                         Console.WriteLine(error);
                     }
+                }
+
+                else
+                {
+                    Console.WriteLine(e.Message);
                 }
 
                 Console.WriteLine(exitMessage);
@@ -123,6 +131,8 @@ namespace IW4MAdmin.Application
             {
                 goto restart;
             }
+
+            serviceProvider.Dispose();
         }
 
         /// <summary>
@@ -132,7 +142,7 @@ namespace IW4MAdmin.Application
         private static async Task RunApplicationTasksAsync()
         {
             var webfrontTask = ServerManager.GetApplicationSettings().Configuration().EnableWebFront ?
-                WebfrontCore.Program.Init(ServerManager, ServerManager.CancellationToken) :
+                WebfrontCore.Program.Init(ServerManager, serviceProvider, ServerManager.CancellationToken) :
                 Task.CompletedTask;
 
             // we want to run this one on a manual thread instead of letting the thread pool handle it,
@@ -156,10 +166,10 @@ namespace IW4MAdmin.Application
         /// notifies user if an update is available
         /// </summary>
         /// <returns></returns>
-        private static async Task CheckVersion()
+        private static async Task CheckVersion(ITranslationLookup translationLookup)
         {
             var api = API.Master.Endpoint.Get();
-            var loc = Utilities.CurrentLocalization.LocalizationIndex;
+            var loc = translationLookup;
 
             var version = new API.Master.VersionInfo()
             {
@@ -257,12 +267,59 @@ namespace IW4MAdmin.Application
         /// </summary>
         private static IServiceCollection ConfigureServices()
         {
-            var serviceProvider = new ServiceCollection();
-            serviceProvider.AddSingleton<IManager, ApplicationManager>()
-                .AddSingleton<ILogger>(_serviceProvider => new Logger("IW4MAdmin-Manager"))
-                .AddSingleton<IMiddlewareActionHandler, MiddlewareActionHandler>();
+            var defaultLogger = new Logger("IW4MAdmin-Manager");
+            var pluginImporter = new PluginImporter(defaultLogger);
 
-            return serviceProvider;
+            var serviceCollection = new ServiceCollection();
+            serviceCollection.AddSingleton<IServiceCollection>(_serviceProvider => serviceCollection)
+                .AddSingleton(new BaseConfigurationHandler<ApplicationConfiguration>("IW4MAdminSettings") as IConfigurationHandler<ApplicationConfiguration>)
+                .AddSingleton(new BaseConfigurationHandler<CommandConfiguration>("CommandConfiguration") as IConfigurationHandler<CommandConfiguration>)
+                .AddSingleton(_serviceProvider => _serviceProvider.GetRequiredService<IConfigurationHandler<ApplicationConfiguration>>().Configuration())
+                .AddSingleton(_serviceProvider => _serviceProvider.GetRequiredService<IConfigurationHandler<CommandConfiguration>>().Configuration() ?? new CommandConfiguration())
+                .AddSingleton<ILogger>(_serviceProvider => defaultLogger)
+                .AddSingleton<IPluginImporter, PluginImporter>()
+                .AddSingleton<IMiddlewareActionHandler, MiddlewareActionHandler>()
+                .AddSingleton<IRConConnectionFactory, RConConnectionFactory>()
+                .AddSingleton<IGameServerInstanceFactory, GameServerInstanceFactory>()
+                .AddSingleton<IConfigurationHandlerFactory, ConfigurationHandlerFactory>()
+                .AddSingleton(_serviceProvider =>
+                {
+                    var config = _serviceProvider.GetRequiredService<IConfigurationHandler<ApplicationConfiguration>>().Configuration();
+                    return Localization.Configure.Initialize(useLocalTranslation: config?.UseLocalTranslations ?? false,
+                        customLocale: config?.EnableCustomLocale ?? false ? (config.CustomLocale ?? "en-US") : "en-US");
+                })
+                .AddSingleton<IManager, ApplicationManager>();
+
+            // register the native commands
+            foreach (var commandType in typeof(SharedLibraryCore.Commands.QuitCommand).Assembly.GetTypes()
+                        .Where(_command => _command.BaseType == typeof(Command)))
+            {
+                defaultLogger.WriteInfo($"Registered native command type {commandType.Name}");
+                serviceCollection.AddSingleton(typeof(IManagerCommand), commandType);
+            }
+
+            // register the plugin implementations
+            var pluginImplementations = pluginImporter.DiscoverAssemblyPluginImplementations();
+            foreach (var pluginType in pluginImplementations.Item1)
+            {
+                defaultLogger.WriteInfo($"Registered plugin type {pluginType.FullName}");
+                serviceCollection.AddSingleton(typeof(IPlugin), pluginType);
+            }
+
+            // register the plugin commands
+            foreach (var commandType in pluginImplementations.Item2)
+            {
+                defaultLogger.WriteInfo($"Registered plugin command type {commandType.FullName}");
+                serviceCollection.AddSingleton(typeof(IManagerCommand), commandType);
+            }
+
+            // register any script plugins
+            foreach (var scriptPlugin in pluginImporter.DiscoverScriptPlugins())
+            {
+                serviceCollection.AddSingleton(scriptPlugin);
+            }
+
+            return serviceCollection;
         }
     }
 }

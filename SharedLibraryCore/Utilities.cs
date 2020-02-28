@@ -645,7 +645,7 @@ namespace SharedLibraryCore
             {
                 Console.Write($"{question}{(string.IsNullOrEmpty(description) ? "" : $" ({description})")}{(defaultValue == null ? "" : $" [{CurrentLocalization.LocalizationIndex["SETUP_PROMPT_DEFAULT"]} {defaultValue}]")}: ");
                 response = inputOrDefault();
-            } while (string.IsNullOrWhiteSpace(response));
+            } while (string.IsNullOrWhiteSpace(response) && response != defaultValue);
 
             return response;
         }
@@ -830,6 +830,13 @@ namespace SharedLibraryCore
         {
             return Regex.IsMatch(message, @"^\u0014(?:[A-Z]|_)+$");
         }
+
+        /// <summary>
+        /// trims new line and whitespace from string
+        /// </summary>
+        /// <param name="str">source string</param>
+        /// <returns></returns>
+        public static string TrimNewLine(this string str) => str.Trim().TrimEnd('\r', '\n');
 
         public static Vector3 FixIW4Angles(this Vector3 vector)
         {

@@ -1,5 +1,6 @@
 ﻿using IW4MAdmin.Application.EventParsers;
 using IW4MAdmin.Application.IO;
+using IW4MAdmin.Application.Misc;
 using IW4MAdmin.Application.RconParsers;
 using SharedLibraryCore;
 using SharedLibraryCore.Configuration;
@@ -23,14 +24,18 @@ namespace IW4MAdmin
 {
     public class IW4MServer : Server
     {
-        private static readonly SharedLibraryCore.Localization.Index loc = Utilities.CurrentLocalization.LocalizationIndex;
+        private static readonly SharedLibraryCore.Localization.TranslationLookup loc = Utilities.CurrentLocalization.LocalizationIndex;
         private GameLogEventDetection LogEvent;
+        private readonly ITranslationLookup _translationLookup;
         private const int REPORT_FLAG_COUNT = 4;
+        private int lastGameTime = 0;
 
         public int Id { get; private set; }
 
-        public IW4MServer(IManager mgr, ServerConfiguration cfg) : base(mgr, cfg)
+        public IW4MServer(IManager mgr, ServerConfiguration cfg, ITranslationLookup lookup,
+            IRConConnectionFactory connectionFactory) : base(mgr, connectionFactory, cfg)
         {
+            _translationLookup = lookup;
         }
 
         override public async Task<EFClient> OnClientConnected(EFClient clientFromLog)
@@ -61,6 +66,7 @@ namespace IW4MAdmin
             client.Score = clientFromLog.Score;
             client.Ping = clientFromLog.Ping;
             client.CurrentServer = this;
+            client.State = ClientState.Connecting;
 
             Clients[client.ClientNumber] = client;
 #if DEBUG == true
@@ -148,10 +154,16 @@ namespace IW4MAdmin
                     }
                 }
 
-                foreach (var plugin in SharedLibraryCore.Plugins.PluginImporter.ActivePlugins)
+                foreach (var plugin in Manager.Plugins)
                 {
                     try
                     {
+                        // we don't want to run the events on parser plugins
+                        if (plugin is ScriptPlugin scriptPlugin && scriptPlugin.IsParser)
+                        {
+                            continue;
+                        }
+
                         await plugin.OnEventAsync(E, this);
                     }
                     catch (AuthorizationException e)
@@ -177,6 +189,11 @@ namespace IW4MAdmin
             catch (Exception e)
             {
                 lastException = e;
+
+                if (E.Origin != null && E.Type == GameEvent.EventType.Command)
+                {
+                    E.Origin.Tell(_translationLookup["SERVER_ERROR_COMMAND_INGAME"]);
+                }
             }
 
             finally
@@ -430,6 +447,14 @@ namespace IW4MAdmin
 
             else if (E.Type == GameEvent.EventType.PreDisconnect)
             {
+                bool isPotentialFalseQuit = E.GameTime.HasValue && E.GameTime.Value == lastGameTime;
+
+                if (isPotentialFalseQuit)
+                {
+                    Logger.WriteInfo($"Receive predisconnect event for {E.Origin}, but it occured at game time {E.GameTime.Value}, which is the same last map change, so we're ignoring");
+                    return false;
+                }
+
                 // predisconnect comes from minimal rcon polled players and minimal log players
                 // so we need to disconnect the "full" version of the client
                 var client = GetClientsAsList().FirstOrDefault(_client => _client.Equals(E.Origin));
@@ -440,7 +465,7 @@ namespace IW4MAdmin
                     return false;
                 }
 
-                else if (client.State == ClientState.Connected)
+                else if (client.State != ClientState.Unknown)
                 {
 #if DEBUG == true
                     Logger.WriteDebug($"Begin PreDisconnect for {client}");
@@ -527,11 +552,21 @@ namespace IW4MAdmin
                     string mapname = dict["mapname"];
                     UpdateMap(mapname);
                 }
+
+                if (E.GameTime.HasValue)
+                {
+                    lastGameTime = E.GameTime.Value;
+                }
             }
 
             if (E.Type == GameEvent.EventType.MapEnd)
             {
                 Logger.WriteInfo("Game ending...");
+
+                if (E.GameTime.HasValue)
+                {
+                    lastGameTime = E.GameTime.Value;
+                }
             }
 
             if (E.Type == GameEvent.EventType.Tell)
@@ -596,6 +631,12 @@ namespace IW4MAdmin
                     Logger.WriteWarning($"Could not execute on join for {origin}");
                     Logger.WriteDebug(e.GetExceptionInfo());
                 }
+            }
+
+            else if (client.IPAddress != null && client.State == ClientState.Disconnecting)
+            {
+                Logger.WriteWarning($"{client} state is Unknown (probably kicked), but they are still connected. trying to kick again...");
+                await client.CanConnect(client.IPAddress);
             }
         }
 
@@ -666,7 +707,7 @@ namespace IW4MAdmin
                 await e.WaitAsync(Utilities.DefaultCommandTimeout, new CancellationTokenRegistration().Token);
             }
 
-            foreach (var plugin in SharedLibraryCore.Plugins.PluginImporter.ActivePlugins)
+            foreach (var plugin in Manager.Plugins)
             {
                 await plugin.OnUnloadAsync();
             }
@@ -699,11 +740,6 @@ namespace IW4MAdmin
 
                     foreach (var disconnectingClient in polledClients[1])
                     {
-                        if (disconnectingClient.State == ClientState.Disconnecting)
-                        {
-                            continue;
-                        }
-
                         var e = new GameEvent()
                         {
                             Type = GameEvent.EventType.PreDisconnect,
@@ -877,9 +913,9 @@ namespace IW4MAdmin
                 Version = RconParser.Version;
             }
 
-            var svRunning = await this.GetDvarAsync<int>("sv_running");
+            var svRunning = await this.GetDvarAsync<string>("sv_running");
 
-            if (svRunning.Value == 0)
+            if (!string.IsNullOrEmpty(svRunning.Value) && svRunning.Value != "1")
             {
                 throw new ServerException(loc["SERVER_ERROR_NOT_RUNNING"]);
             }
@@ -1186,8 +1222,8 @@ namespace IW4MAdmin
         {
             Manager.GetMessageTokens().Add(new MessageToken("TOTALPLAYERS", (Server s) => Task.Run(async () => (await Manager.GetClientService().GetTotalClientsAsync()).ToString())));
             Manager.GetMessageTokens().Add(new MessageToken("VERSION", (Server s) => Task.FromResult(Application.Program.Version.ToString())));
-            Manager.GetMessageTokens().Add(new MessageToken("NEXTMAP", (Server s) => SharedLibraryCore.Commands.CNextMap.GetNextMap(s)));
-            Manager.GetMessageTokens().Add(new MessageToken("ADMINS", (Server s) => Task.FromResult(SharedLibraryCore.Commands.CListAdmins.OnlineAdmins(s))));
+            Manager.GetMessageTokens().Add(new MessageToken("NEXTMAP", (Server s) => SharedLibraryCore.Commands.NextMapCommand.GetNextMap(s, _translationLookup)));
+            Manager.GetMessageTokens().Add(new MessageToken("ADMINS", (Server s) => Task.FromResult(SharedLibraryCore.Commands.ListAdminsCommand.OnlineAdmins(s, _translationLookup))));
         }
     }
 }

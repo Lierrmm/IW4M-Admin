@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using SharedLibraryCore;
 using SharedLibraryCore.Dtos;
 using SharedLibraryCore.Interfaces;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 
@@ -12,7 +13,6 @@ namespace WebfrontCore.Controllers
     {
         public HomeController(IManager manager) : base(manager)
         {
-
         }
 
         public async Task<IActionResult> Index()
@@ -65,7 +65,7 @@ namespace WebfrontCore.Controllers
                     var pluginType = _cmd.GetType().Assembly.GetTypes().FirstOrDefault(_type => _type.Assembly != excludedAssembly && typeof(IPlugin).IsAssignableFrom(_type));
                     return pluginType == null ?
                         Utilities.CurrentLocalization.LocalizationIndex["WEBFRONT_HELP_COMMAND_NATIVE"] :
-                        SharedLibraryCore.Plugins.PluginImporter.ActivePlugins.First(_plugin => _plugin.GetType() == pluginType).Name; // for now we're just returning the name of the plugin, maybe later we'll include more info
+                        Manager.Plugins.First(_plugin => _plugin.GetType() == pluginType).Name; // for now we're just returning the name of the plugin, maybe later we'll include more info
                 })
                 .Select(_grp => (_grp.Key, _grp.AsEnumerable()));
 
