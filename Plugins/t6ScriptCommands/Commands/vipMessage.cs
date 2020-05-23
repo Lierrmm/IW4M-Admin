@@ -12,7 +12,7 @@ namespace IW4MAdmin.Plugins.Login.Commands
 
         public override async Task ExecuteAsync(GameEvent E)
         {
-            E.Owner.Broadcast("^3$1.50^7 for VIP - All VIP's get access to VIP Menu");
+            E.Owner.Broadcast("^3$3.50^7 for VIP - All VIP's get access to VIP Menu");
             E.Owner.Broadcast("Purchase Via Discord: ^5www.gsc.rocks");
         }
     }
