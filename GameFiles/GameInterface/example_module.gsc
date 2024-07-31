@@ -35,7 +35,7 @@ RegisterCustomCommands()
 
     // games the command is supported on
     // separate with comma or don't define for all
-    // valid values: IW3, IW4, IW5, IW6, T4, T5, T6, T7, SHG1, CSGO, H1
+    // valid values: IW3, IW4, IW5, IW6, T4, T5, T6, T7, SHG1, CSGO, H1, H2M
     command.supportedGames = "IW4,IW5,T5,T6";
 
     // indicates if a target player must be provided to execvute on

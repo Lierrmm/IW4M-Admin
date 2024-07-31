@@ -578,13 +578,13 @@ namespace SharedLibraryCore.Database.Models
                     return false;
                 }
 
-                if (Name.Where(c => char.IsControl(c)).Count() > 0)
-                {
-                    Utilities.DefaultLogger.LogInformation(
-                        "Kicking {Client} because their name contains control characters", ToString());
-                    Kick(loc["SERVER_KICK_CONTROLCHARS"], Utilities.IW4MAdminClient(CurrentServer));
-                    return false;
-                }
+                //if (Name.Where(c => char.IsControl(c)).Count() > 0)
+                //{
+                //    Utilities.DefaultLogger.LogInformation(
+                //        "Kicking {Client} because their name contains control characters", ToString());
+                //    Kick(loc["SERVER_KICK_CONTROLCHARS"], Utilities.IW4MAdminClient(CurrentServer));
+                //    return false;
+                //}
 
                 // reserved slots stuff
                 // todo: bots don't seem to honor party_maxplayers/sv_maxclients
