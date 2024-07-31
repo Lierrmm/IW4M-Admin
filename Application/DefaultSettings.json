@@ -664,7 +664,7 @@
       ]
     },
     {
-      "Game": "H2M",
+      "Game": "H2",
       "Gametypes": [
         {
           "Name": "conf",
@@ -2209,7 +2209,7 @@
       ]
     },
     {
-      "Game": "H2M",
+      "Game": "H2",
       "Maps": [
         {
           "Alias": "Ambush",

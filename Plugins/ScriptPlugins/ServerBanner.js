@@ -124,7 +124,7 @@ const plugin = {
                     'csgo': {
                         right: colorLeft
                     },
-                    'h2m': {
+                    'h2': {
                         right: colorLeft
                     },
                 };
